@@ -50,6 +50,7 @@ import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
@@ -167,12 +168,12 @@ public class SSLUtils {
         return new SSLHandlerFactory(sslContext, -1, -1);
     }
 
-    private static String[] getEnabledProtocols(final Configuration config) {
+    static String[] getEnabledProtocols(final Configuration config) {
         checkNotNull(config, "config must not be null");
         return config.get(SecurityOptions.SSL_PROTOCOL).split(",");
     }
 
-    private static String[] getEnabledCipherSuites(final Configuration config) {
+    static String[] getEnabledCipherSuites(final Configuration config) {
         checkNotNull(config, "config must not be null");
         return config.get(SecurityOptions.SSL_ALGORITHMS).split(",");
     }
@@ -195,7 +196,7 @@ public class SSLUtils {
         }
     }
 
-    private static Optional<TrustManagerFactory> getTrustManagerFactory(
+    static Optional<TrustManagerFactory> getTrustManagerFactory(
             Configuration config, boolean internal)
             throws KeyStoreException, IOException, NoSuchAlgorithmException, CertificateException {
 
@@ -263,7 +264,7 @@ public class SSLUtils {
         return Optional.of(tmf);
     }
 
-    private static KeyManagerFactory getKeyManagerFactory(
+    static KeyManagerFactory getKeyManagerFactory(
             Configuration config, boolean internal, SslProvider provider)
             throws KeyStoreException,
                     IOException,
@@ -418,35 +419,30 @@ public class SSLUtils {
             return null;
         }
 
-        String[] sslProtocols = getEnabledProtocols(config);
-        List<String> ciphers = Arrays.asList(getEnabledCipherSuites(config));
+        String keystoreFilePath =
+                getAndCheckOption(
+                        config, SecurityOptions.SSL_REST_KEYSTORE, SecurityOptions.SSL_KEYSTORE);
 
-        final SslContextBuilder sslContextBuilder;
-        if (clientMode) {
-            sslContextBuilder = SslContextBuilder.forClient();
-            if (clientAuth != ClientAuth.NONE) {
-                KeyManagerFactory kmf = getKeyManagerFactory(config, false, provider);
-                sslContextBuilder.keyManager(kmf);
-            }
-        } else {
-            KeyManagerFactory kmf = getKeyManagerFactory(config, false, provider);
-            sslContextBuilder = SslContextBuilder.forServer(kmf);
-        }
+        ReloadableSslContext reloadableSslContext =
+                new ReloadableSslContext(config, clientMode, clientAuth, provider);
+        FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+                    @Override
+                    protected void onFileOrDirectoryModified(Path relativePath) {
+                        try {
+                            // TODO remove
+                            System.out.println(
+                                    "Reloading SSL context because of certificate change");
+                            reloadableSslContext.reload();
+                            System.out.println("SSL context reloaded successfully");
+                        } catch (Exception e) {
+                            System.out.println("SSL context reload received exception: " + e);
+                        }
+                    }
+                };
+        fileSystemWatchService.start();
 
-        if (clientMode || clientAuth != ClientAuth.NONE) {
-            Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, false);
-            tmf.map(
-                    // Use specific ciphers and protocols if SSL is configured with self-signed
-                    // certificates (user-supplied truststore)
-                    tm ->
-                            sslContextBuilder
-                                    .trustManager(tm)
-                                    .protocols(sslProtocols)
-                                    .ciphers(ciphers)
-                                    .clientAuth(clientAuth));
-        }
-
-        return sslContextBuilder.sslProvider(provider).build();
+        return reloadableSslContext;
     }
 
     // ------------------------------------------------------------------------
