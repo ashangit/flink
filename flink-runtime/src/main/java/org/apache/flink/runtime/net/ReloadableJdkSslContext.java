@@ -17,11 +17,29 @@
 
 package org.apache.flink.runtime.net;
 
+import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
+import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
+import static org.apache.flink.runtime.net.SSLUtils.getKeyManagerFactory;
+import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
+import static org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider.JDK;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLSessionContext;
+import javax.net.ssl.TrustManagerFactory;
+
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.SecurityOptions;
 
 import org.apache.flink.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.ApplicationProtocolNegotiator;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.ClientAuth;
+import org.apache.flink.shaded.netty4.io.netty.handler.ssl.JdkSslContext;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContextBuilder;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider;
@@ -29,108 +47,92 @@ import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLSessionContext;
-import javax.net.ssl.TrustManagerFactory;
-
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
-
-import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
-import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
-import static org.apache.flink.runtime.net.SSLUtils.getKeyManagerFactory;
-import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
-
 /** SSL context which is able to reload keystore. */
-public class ReloadableSslContext extends SslContext {
+public class ReloadableJdkSslContext extends SslContext {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ReloadableSslContext.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ReloadableJdkSslContext.class);
     private final Configuration config;
     private final boolean clientMode;
-    private final ClientAuth clientAuth;
     private final SslProvider provider;
-    private volatile SslContext sslContext;
+    private volatile JdkSslContext jdkSslContext;
 
-    public ReloadableSslContext(
+    public ReloadableJdkSslContext(
             Configuration config,
             boolean clientMode,
-            ClientAuth clientAuth,
             SslProvider provider)
             throws Exception {
         this.config = config;
         this.clientMode = clientMode;
-        this.clientAuth = clientAuth;
         this.provider = provider;
-            loadContext();
+            loadContextInternal();
     }
 
     @Override
     public boolean isClient() {
-        return sslContext.isClient();
+        return jdkSslContext.isClient();
     }
 
     @Override
     public List<String> cipherSuites() {
-        return sslContext.cipherSuites();
+        return jdkSslContext.cipherSuites();
     }
 
     @Override
     public ApplicationProtocolNegotiator applicationProtocolNegotiator() {
-        return sslContext.applicationProtocolNegotiator();
+        return jdkSslContext.applicationProtocolNegotiator();
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator) {
-        return sslContext.newEngine(byteBufAllocator);
+        return jdkSslContext.newEngine(byteBufAllocator);
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator, String s, int i) {
-        return sslContext.newEngine(byteBufAllocator, s, i);
+        return jdkSslContext.newEngine(byteBufAllocator, s, i);
     }
 
     @Override
     public SSLSessionContext sessionContext() {
-        return sslContext.sessionContext();
+        return jdkSslContext.sessionContext();
+    }
+
+    public final SSLContext context() {
+        return this.jdkSslContext.context();
     }
 
     public void reload() throws Exception {
-            loadContext();
+            loadContextInternal();
     }
 
-    private void loadContext() throws Exception {
-        LOG.info("Loading SSL context from {}", config);
+    private void loadContextInternal() throws Exception {
+        LOG.info("Loading Internal SSL context from {}", config);
 
         String[] sslProtocols = getEnabledProtocols(config);
         List<String> ciphers = Arrays.asList(getEnabledCipherSuites(config));
+        int sessionCacheSize = config.get(SecurityOptions.SSL_INTERNAL_SESSION_CACHE_SIZE);
+        int sessionTimeoutMs = config.get(SecurityOptions.SSL_INTERNAL_SESSION_TIMEOUT);
+
+        KeyManagerFactory kmf = getKeyManagerFactory(config, true, provider);
+        ClientAuth clientAuth = ClientAuth.REQUIRE;
 
         final SslContextBuilder sslContextBuilder;
         if (clientMode) {
-            sslContextBuilder = SslContextBuilder.forClient();
-            if (clientAuth != ClientAuth.NONE) {
-                KeyManagerFactory kmf = getKeyManagerFactory(config, false, provider);
-                sslContextBuilder.keyManager(kmf);
-            }
+            sslContextBuilder = SslContextBuilder.forClient().keyManager(kmf);
         } else {
-            KeyManagerFactory kmf = getKeyManagerFactory(config, false, provider);
             sslContextBuilder = SslContextBuilder.forServer(kmf);
         }
 
-        if (clientMode || clientAuth != ClientAuth.NONE) {
-            Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, false);
-            tmf.map(
-                    // Use specific ciphers and protocols if SSL is configured with self-signed
-                    // certificates (user-supplied truststore)
-                    tm ->
-                            sslContextBuilder
-                                    .trustManager(tm)
-                                    .protocols(sslProtocols)
-                                    .ciphers(ciphers)
-                                    .clientAuth(clientAuth));
-        }
+        Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, true);
+        tmf.map(sslContextBuilder::trustManager);
 
-        sslContext = sslContextBuilder.sslProvider(provider).build();
+        jdkSslContext = (JdkSslContext) sslContextBuilder
+                .sslProvider(provider)
+                .protocols(sslProtocols)
+                .ciphers(ciphers)
+                .clientAuth(clientAuth)
+                .sessionCacheSize(sessionCacheSize)
+                .sessionTimeout(sessionTimeoutMs / 1000)
+                .build();
     }
 }

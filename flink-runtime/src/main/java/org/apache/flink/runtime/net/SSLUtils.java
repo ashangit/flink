@@ -31,7 +31,6 @@ import org.apache.flink.shaded.netty4.io.netty.handler.ssl.JdkSslContext;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.OpenSsl;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.OpenSslX509KeyManagerFactory;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContext;
-import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContextBuilder;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.util.FingerprintTrustManagerFactory;
 
@@ -56,8 +55,6 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Optional;
 
 import static org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider.JDK;
@@ -325,8 +322,8 @@ public class SSLUtils {
     @Nullable
     private static SSLContext createInternalSSLContext(Configuration config, boolean clientMode)
             throws Exception {
-        JdkSslContext nettySSLContext =
-                (JdkSslContext) createInternalNettySSLContext(config, clientMode, JDK);
+        ReloadableJdkSslContext nettySSLContext =
+                (ReloadableJdkSslContext) createInternalNettySSLContext(config, clientMode, JDK);
         if (nettySSLContext != null) {
             return nettySSLContext.context();
         } else {
@@ -353,32 +350,29 @@ public class SSLUtils {
             return null;
         }
 
-        String[] sslProtocols = getEnabledProtocols(config);
-        List<String> ciphers = Arrays.asList(getEnabledCipherSuites(config));
-        int sessionCacheSize = config.get(SecurityOptions.SSL_INTERNAL_SESSION_CACHE_SIZE);
-        int sessionTimeoutMs = config.get(SecurityOptions.SSL_INTERNAL_SESSION_TIMEOUT);
+        String keystoreFilePath =
+                getAndCheckOption(
+                        config, SecurityOptions.SSL_INTERNAL_KEYSTORE, SecurityOptions.SSL_INTERNAL_KEYSTORE);
 
-        KeyManagerFactory kmf = getKeyManagerFactory(config, true, provider);
-        ClientAuth clientAuth = ClientAuth.REQUIRE;
+        ReloadableJdkSslContext reloadableJdkSslContext = new ReloadableJdkSslContext(config, clientMode, provider);
+        FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+                    @Override
+                    protected void onFileOrDirectoryModified(Path relativePath) {
+                        try {
+                            // TODO remove
+                            System.out.println(
+                                    "Reloading Internal SSL context because of certificate change");
+                            reloadableJdkSslContext.reload();
+                            System.out.println("Internal SSL context reloaded successfully");
+                        } catch (Exception e) {
+                            System.out.println("Internal SSL context reload received exception: " + e);
+                        }
+                    }
+                };
+        fileSystemWatchService.start();
 
-        final SslContextBuilder sslContextBuilder;
-        if (clientMode) {
-            sslContextBuilder = SslContextBuilder.forClient().keyManager(kmf);
-        } else {
-            sslContextBuilder = SslContextBuilder.forServer(kmf);
-        }
-
-        Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, true);
-        tmf.map(sslContextBuilder::trustManager);
-
-        return sslContextBuilder
-                .sslProvider(provider)
-                .protocols(sslProtocols)
-                .ciphers(ciphers)
-                .clientAuth(clientAuth)
-                .sessionCacheSize(sessionCacheSize)
-                .sessionTimeout(sessionTimeoutMs / 1000)
-                .build();
+        return reloadableJdkSslContext;
     }
 
     /** Creates an SSL context for clients against the external REST endpoint. */
