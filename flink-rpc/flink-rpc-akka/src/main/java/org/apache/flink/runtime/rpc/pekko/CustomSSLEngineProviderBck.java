@@ -17,15 +17,7 @@
 
 package org.apache.flink.runtime.rpc.pekko;
 
-import org.apache.flink.shaded.netty4.io.netty.handler.ssl.util.FingerprintTrustManagerFactory;
-
 import com.typesafe.config.Config;
-import org.apache.pekko.actor.ActorSystem;
-import org.apache.pekko.remote.RemoteTransportException;
-import org.apache.pekko.remote.transport.netty.ConfigSSLEngineProvider;
-
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,18 +27,27 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.util.List;
 
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+
+import org.apache.flink.shaded.netty4.io.netty.handler.ssl.util.FingerprintTrustManagerFactory;
+
+import org.apache.pekko.actor.ActorSystem;
+import org.apache.pekko.remote.RemoteTransportException;
+import org.apache.pekko.remote.transport.netty.ConfigSSLEngineProvider;
+
 /**
  * Extension of the {@link ConfigSSLEngineProvider} to use a {@link FingerprintTrustManagerFactory}.
  */
 @SuppressWarnings("deprecation")
-public class CustomSSLEngineProvider extends ConfigSSLEngineProvider {
+public class CustomSSLEngineProviderBck extends ConfigSSLEngineProvider {
     private final String sslTrustStore;
     private final String sslTrustStorePassword;
     private final List<String> sslCertFingerprints;
     private final String sslKeyStoreType;
     private final String sslTrustStoreType;
 
-    public CustomSSLEngineProvider(ActorSystem system) {
+    public CustomSSLEngineProviderBck(ActorSystem system) {
         super(system);
         final Config securityConfig =
                 system.settings().config().getConfig("pekko.remote.classic.netty.ssl.security");
