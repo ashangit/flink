@@ -18,6 +18,9 @@
 
 package org.apache.flink.runtime.blob;
 
+import java.net.SocketException;
+import java.nio.file.Path;
+
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -27,6 +30,7 @@ import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.SecurityOptions;
 import org.apache.flink.runtime.dispatcher.cleanup.GloballyCleanableResource;
 import org.apache.flink.runtime.dispatcher.cleanup.LocallyCleanableResource;
+import org.apache.flink.runtime.net.FileSystemWatchService;
 import org.apache.flink.runtime.net.SSLUtils;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FileUtils;
@@ -98,7 +102,7 @@ public class BlobServer extends Thread
 
     /** The server socket listening for incoming connections. */
     // can be null if BlobServer is shut down before constructor completion
-    @Nullable private final ServerSocket serverSocket;
+    @Nullable private final BlobServerSocket blobServerSocket;
 
     /** Blob Server configuration. */
     private final Configuration blobServiceConfiguration;
@@ -198,51 +202,29 @@ public class BlobServer extends Thread
         this.shutdownHook = ShutdownHookUtil.addShutdownHook(this, getClass().getSimpleName(), LOG);
 
         //  ----------------------- start the server -------------------
+        blobServerSocket = new BlobServerSocket(config, backlog, maxConnections);
 
-        final String serverPortRange = config.get(BlobServerOptions.PORT);
-        final Iterator<Integer> ports = NetUtils.getPortRangeFromString(serverPortRange);
-
-        final ServerSocketFactory socketFactory;
-        if (SecurityOptions.isInternalSSLEnabled(config)
-                && config.get(BlobServerOptions.SSL_ENABLED)) {
-            try {
-                socketFactory = SSLUtils.createSSLServerSocketFactory(config);
-            } catch (Exception e) {
-                throw new IOException("Failed to initialize SSL for the blob server", e);
-            }
-        } else {
-            socketFactory = ServerSocketFactory.getDefault();
-        }
-
-        final int finalBacklog = backlog;
-        final String bindHost =
-                config.getOptional(JobManagerOptions.BIND_HOST)
-                        .orElseGet(NetUtils::getWildcardIPAddress);
-
-        this.serverSocket =
-                NetUtils.createSocketFromPorts(
-                        ports,
-                        (port) ->
-                                socketFactory.createServerSocket(
-                                        port, finalBacklog, InetAddress.getByName(bindHost)));
-
-        if (serverSocket == null) {
-            throw new IOException(
-                    "Unable to open BLOB Server in specified port range: " + serverPortRange);
-        }
+        String keystoreFilePath = config.get(SecurityOptions.SSL_INTERNAL_KEYSTORE, config.get(SecurityOptions.SSL_INTERNAL_KEYSTORE));
+        org.apache.flink.runtime.net.FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+                    @Override
+                    protected void onFileOrDirectoryModified(Path relativePath) {
+                        try {
+                            // TODO remove
+                            System.out.println(
+                                    "Reloading BLOB SSL context because of certificate change");
+                            blobServerSocket.createSocket();
+                            System.out.println("BLOB SSL context reloaded successfully");
+                        } catch (Exception e) {
+                            System.out.println("BLOB SSL context reload received exception: " + e);
+                        }
+                    }
+                };
+        fileSystemWatchService.start();
 
         // start the server thread
-        setName("BLOB Server listener at " + getPort());
+        setName("BLOB Server listener");
         setDaemon(true);
-
-        if (LOG.isInfoEnabled()) {
-            LOG.info(
-                    "Started BLOB server at {}:{} - max concurrent requests: {} - max backlog: {}",
-                    serverSocket.getInetAddress().getHostAddress(),
-                    getPort(),
-                    maxConnections,
-                    backlog);
-        }
 
         checkStoredBlobsForCorruption();
         registerBlobExpiryTimes();
@@ -313,25 +295,32 @@ public class BlobServer extends Thread
     public void run() {
         try {
             while (!this.shutdownRequested.get()) {
-                BlobServerConnection conn =
-                        new BlobServerConnection(NetUtils.acceptWithoutTimeout(serverSocket), this);
                 try {
-                    synchronized (activeConnections) {
-                        while (activeConnections.size() >= maxConnections) {
-                            activeConnections.wait(2000);
-                        }
-                        activeConnections.add(conn);
-                    }
-
-                    conn.start();
-                    conn = null;
-                } finally {
-                    if (conn != null) {
-                        conn.close();
+                    BlobServerConnection conn =
+                            new BlobServerConnection(
+                                    NetUtils.acceptWithoutTimeout(blobServerSocket.getServerSocket()),
+                                    this);
+                    try {
                         synchronized (activeConnections) {
-                            activeConnections.remove(conn);
+                            while (activeConnections.size() >= maxConnections) {
+                                activeConnections.wait(2000);
+                            }
+                            activeConnections.add(conn);
+                        }
+
+                        conn.start();
+                        conn = null;
+                    } finally {
+                        if (conn != null) {
+                            conn.close();
+                            synchronized (activeConnections) {
+                                activeConnections.remove(conn);
+                            }
                         }
                     }
+                    // TODO add a way to indicate under restart
+                } catch (SocketException t) {
+                    LOG.error("BLOB server restarting", t);
                 }
             }
         } catch (Throwable t) {
@@ -355,9 +344,9 @@ public class BlobServer extends Thread
         if (shutdownRequested.compareAndSet(false, true)) {
             Exception exception = null;
 
-            if (serverSocket != null) {
+            if (blobServerSocket != null) {
                 try {
-                    this.serverSocket.close();
+                    this.blobServerSocket.close();
                 } catch (IOException ioe) {
                     exception = ioe;
                 }
@@ -396,24 +385,13 @@ public class BlobServer extends Thread
             // Remove shutdown hook to prevent resource leaks
             ShutdownHookUtil.removeShutdownHook(shutdownHook, getClass().getSimpleName(), LOG);
 
-            if (LOG.isInfoEnabled()) {
-                if (serverSocket != null) {
-                    LOG.info(
-                            "Stopped BLOB server at {}:{}",
-                            serverSocket.getInetAddress().getHostAddress(),
-                            getPort());
-                } else {
-                    LOG.info("Stopped BLOB server before initializing the socket");
-                }
-            }
-
             ExceptionUtils.tryRethrowIOException(exception);
         }
     }
 
     protected BlobClient createClient() throws IOException {
         return new BlobClient(
-                new InetSocketAddress(serverSocket.getInetAddress(), getPort()),
+                new InetSocketAddress(blobServerSocket.getServerSocket().getInetAddress(), getPort()),
                 blobServiceConfiguration);
     }
 
@@ -1006,7 +984,7 @@ public class BlobServer extends Thread
      */
     @Override
     public int getPort() {
-        return this.serverSocket.getLocalPort();
+        return this.blobServerSocket.getPort();
     }
 
     /**
@@ -1030,7 +1008,7 @@ public class BlobServer extends Thread
 
     /** Access to the server socket, for testing. */
     ServerSocket getServerSocket() {
-        return this.serverSocket;
+        return this.blobServerSocket.getServerSocket();
     }
 
     void unregisterConnection(BlobServerConnection conn) {
