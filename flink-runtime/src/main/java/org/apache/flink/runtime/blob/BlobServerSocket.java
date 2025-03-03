@@ -18,15 +18,6 @@
 
 package org.apache.flink.runtime.blob;
 
-import java.io.IOException;
-import java.net.InetAddress;
-
-import java.net.ServerSocket;
-import java.util.Collections;
-import java.util.Iterator;
-
-import javax.net.ServerSocketFactory;
-
 import org.apache.flink.configuration.BlobServerOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.JobManagerOptions;
@@ -36,6 +27,14 @@ import org.apache.flink.util.NetUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.net.ServerSocketFactory;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.util.Collections;
+import java.util.Iterator;
 
 public class BlobServerSocket {
 
@@ -47,7 +46,6 @@ public class BlobServerSocket {
     private ServerSocket serverSocket;
     private final int maxConnections;
     private boolean firstCreation;
-
 
     public BlobServerSocket(Configuration config, int backlog, int maxConnections)
             throws IOException {

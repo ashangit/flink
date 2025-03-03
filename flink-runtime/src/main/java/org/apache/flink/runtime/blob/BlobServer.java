@@ -18,20 +18,15 @@
 
 package org.apache.flink.runtime.blob;
 
-import java.net.SocketException;
-import java.nio.file.Path;
-
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.BlobServerOptions;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.SecurityOptions;
+import org.apache.flink.core.security.FileSystemWatchCertificateReloadService;
 import org.apache.flink.runtime.dispatcher.cleanup.GloballyCleanableResource;
 import org.apache.flink.runtime.dispatcher.cleanup.LocallyCleanableResource;
-import org.apache.flink.runtime.net.FileSystemWatchService;
-import org.apache.flink.runtime.net.SSLUtils;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.NetUtils;
@@ -46,21 +41,20 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
-import javax.net.ServerSocketFactory;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.SocketException;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.Timer;
@@ -204,19 +198,31 @@ public class BlobServer extends Thread
         //  ----------------------- start the server -------------------
         blobServerSocket = new BlobServerSocket(config, backlog, maxConnections);
 
-        String keystoreFilePath = config.get(SecurityOptions.SSL_INTERNAL_KEYSTORE, config.get(SecurityOptions.SSL_INTERNAL_KEYSTORE));
-        org.apache.flink.runtime.net.FileSystemWatchService fileSystemWatchService =
-                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+        String keystoreFilePath =
+                config.get(
+                        SecurityOptions.SSL_INTERNAL_KEYSTORE,
+                        config.get(SecurityOptions.SSL_INTERNAL_KEYSTORE));
+        String truststoreFilePath =
+                config.get(
+                        SecurityOptions.SSL_INTERNAL_TRUSTSTORE,
+                        config.get(SecurityOptions.SSL_INTERNAL_TRUSTSTORE));
+        FileSystemWatchCertificateReloadService fileSystemWatchService =
+                new FileSystemWatchCertificateReloadService(
+                        new HashSet<>(
+                                List.of(
+                                        Path.of(keystoreFilePath).getParent().toString(),
+                                        Path.of(truststoreFilePath).getParent().toString()))) {
                     @Override
                     protected void onFileOrDirectoryModified(Path relativePath) {
                         try {
-                            // TODO remove
-                            System.out.println(
-                                    "Reloading BLOB SSL context because of certificate change");
+                            LOG.debug(
+                                    "Reloading SSL context because {} has been modified",
+                                    relativePath);
                             blobServerSocket.createSocket();
-                            System.out.println("BLOB SSL context reloaded successfully");
                         } catch (Exception e) {
-                            System.out.println("BLOB SSL context reload received exception: " + e);
+                            LOG.error(
+                                    "Failed to reload SSL context because {} has been modified",
+                                    relativePath);
                         }
                     }
                 };
@@ -298,7 +304,8 @@ public class BlobServer extends Thread
                 try {
                     BlobServerConnection conn =
                             new BlobServerConnection(
-                                    NetUtils.acceptWithoutTimeout(blobServerSocket.getServerSocket()),
+                                    NetUtils.acceptWithoutTimeout(
+                                            blobServerSocket.getServerSocket()),
                                     this);
                     try {
                         synchronized (activeConnections) {
@@ -318,9 +325,8 @@ public class BlobServer extends Thread
                             }
                         }
                     }
-                    // TODO add a way to indicate under restart
                 } catch (SocketException t) {
-                    LOG.error("BLOB server restarting", t);
+                    LOG.debug("BLOB server restarting", t);
                 }
             }
         } catch (Throwable t) {
@@ -391,7 +397,8 @@ public class BlobServer extends Thread
 
     protected BlobClient createClient() throws IOException {
         return new BlobClient(
-                new InetSocketAddress(blobServerSocket.getServerSocket().getInetAddress(), getPort()),
+                new InetSocketAddress(
+                        blobServerSocket.getServerSocket().getInetAddress(), getPort()),
                 blobServiceConfiguration);
     }
 

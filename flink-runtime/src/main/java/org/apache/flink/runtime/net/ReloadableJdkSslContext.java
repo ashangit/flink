@@ -17,96 +17,52 @@
 
 package org.apache.flink.runtime.net;
 
-import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
-import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
-import static org.apache.flink.runtime.net.SSLUtils.getKeyManagerFactory;
-import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
-import static org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider.JDK;
-
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
-
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLSessionContext;
-import javax.net.ssl.TrustManagerFactory;
-
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.SecurityOptions;
 
-import org.apache.flink.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import org.apache.flink.shaded.netty4.io.netty.handler.ssl.ApplicationProtocolNegotiator;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.ClientAuth;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.JdkSslContext;
-import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContextBuilder;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** SSL context which is able to reload keystore. */
-public class ReloadableJdkSslContext extends SslContext {
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
+import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
+import static org.apache.flink.runtime.net.SSLUtils.getKeyManagerFactory;
+import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
+
+/** JDK SSL context which is able to reload keystore. */
+public class ReloadableJdkSslContext extends ReloadableSslContext {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReloadableJdkSslContext.class);
-    private final Configuration config;
-    private final boolean clientMode;
-    private final SslProvider provider;
-    private volatile JdkSslContext jdkSslContext;
 
-    public ReloadableJdkSslContext(
-            Configuration config,
-            boolean clientMode,
-            SslProvider provider)
+    public ReloadableJdkSslContext(Configuration config, boolean clientMode, SslProvider provider)
             throws Exception {
-        this.config = config;
-        this.clientMode = clientMode;
-        this.provider = provider;
-            loadContextInternal();
-    }
-
-    @Override
-    public boolean isClient() {
-        return jdkSslContext.isClient();
-    }
-
-    @Override
-    public List<String> cipherSuites() {
-        return jdkSslContext.cipherSuites();
-    }
-
-    @Override
-    public ApplicationProtocolNegotiator applicationProtocolNegotiator() {
-        return jdkSslContext.applicationProtocolNegotiator();
-    }
-
-    @Override
-    public SSLEngine newEngine(ByteBufAllocator byteBufAllocator) {
-        return jdkSslContext.newEngine(byteBufAllocator);
-    }
-
-    @Override
-    public SSLEngine newEngine(ByteBufAllocator byteBufAllocator, String s, int i) {
-        return jdkSslContext.newEngine(byteBufAllocator, s, i);
-    }
-
-    @Override
-    public SSLSessionContext sessionContext() {
-        return jdkSslContext.sessionContext();
+        super(config, clientMode, ClientAuth.NONE, provider);
     }
 
     public final SSLContext context() {
-        return this.jdkSslContext.context();
+        lock.readLock().lock();
+        try {
+            return ((JdkSslContext) this.sslContext).context();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
-    public void reload() throws Exception {
-            loadContextInternal();
-    }
-
-    private void loadContextInternal() throws Exception {
-        LOG.info("Loading Internal SSL context from {}", config);
+    @Override
+    protected void loadContext() throws Exception {
+        LOG.info("Loading JDK SSL context from {}", this.config);
 
         String[] sslProtocols = getEnabledProtocols(config);
         List<String> ciphers = Arrays.asList(getEnabledCipherSuites(config));
@@ -126,13 +82,19 @@ public class ReloadableJdkSslContext extends SslContext {
         Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, true);
         tmf.map(sslContextBuilder::trustManager);
 
-        jdkSslContext = (JdkSslContext) sslContextBuilder
-                .sslProvider(provider)
-                .protocols(sslProtocols)
-                .ciphers(ciphers)
-                .clientAuth(clientAuth)
-                .sessionCacheSize(sessionCacheSize)
-                .sessionTimeout(sessionTimeoutMs / 1000)
-                .build();
+        lock.writeLock().lock();
+        try {
+            this.sslContext =
+                    sslContextBuilder
+                            .sslProvider(provider)
+                            .protocols(sslProtocols)
+                            .ciphers(ciphers)
+                            .clientAuth(clientAuth)
+                            .sessionCacheSize(sessionCacheSize)
+                            .sessionTimeout(sessionTimeoutMs / 1000)
+                            .build();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 }

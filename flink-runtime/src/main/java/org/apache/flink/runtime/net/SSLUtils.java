@@ -23,6 +23,7 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.configuration.SecurityOptions;
+import org.apache.flink.core.security.FileSystemWatchCertificateReloadService;
 import org.apache.flink.runtime.io.network.netty.SSLHandlerFactory;
 import org.apache.flink.util.StringUtils;
 
@@ -33,6 +34,9 @@ import org.apache.flink.shaded.netty4.io.netty.handler.ssl.OpenSslX509KeyManager
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider;
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.util.FingerprintTrustManagerFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.net.ServerSocketFactory;
@@ -55,6 +59,8 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.flink.shaded.netty4.io.netty.handler.ssl.SslProvider.JDK;
@@ -64,6 +70,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /** Common utilities to manage SSL transport settings. */
 public class SSLUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SSLUtils.class);
 
     /**
      * Creates a factory for SSL Server Sockets from the given configuration. SSL Server Sockets are
@@ -352,21 +360,34 @@ public class SSLUtils {
 
         String keystoreFilePath =
                 getAndCheckOption(
-                        config, SecurityOptions.SSL_INTERNAL_KEYSTORE, SecurityOptions.SSL_INTERNAL_KEYSTORE);
+                        config,
+                        SecurityOptions.SSL_INTERNAL_KEYSTORE,
+                        SecurityOptions.SSL_INTERNAL_KEYSTORE);
+        String truststoreFilePath =
+                getAndCheckOption(
+                        config,
+                        SecurityOptions.SSL_INTERNAL_TRUSTSTORE,
+                        SecurityOptions.SSL_INTERNAL_TRUSTSTORE);
 
-        ReloadableJdkSslContext reloadableJdkSslContext = new ReloadableJdkSslContext(config, clientMode, provider);
-        FileSystemWatchService fileSystemWatchService =
-                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+        ReloadableJdkSslContext reloadableJdkSslContext =
+                new ReloadableJdkSslContext(config, clientMode, provider);
+        FileSystemWatchCertificateReloadService fileSystemWatchService =
+                new FileSystemWatchCertificateReloadService(
+                        new HashSet<>(
+                                List.of(
+                                        Path.of(keystoreFilePath).getParent().toString(),
+                                        Path.of(truststoreFilePath).getParent().toString()))) {
                     @Override
                     protected void onFileOrDirectoryModified(Path relativePath) {
                         try {
-                            // TODO remove
-                            System.out.println(
-                                    "Reloading Internal SSL context because of certificate change");
+                            LOG.debug(
+                                    "Reloading SSL context because {} has been modified",
+                                    relativePath);
                             reloadableJdkSslContext.reload();
-                            System.out.println("Internal SSL context reloaded successfully");
                         } catch (Exception e) {
-                            System.out.println("Internal SSL context reload received exception: " + e);
+                            LOG.error(
+                                    "Failed to reload SSL context because {} has been modified",
+                                    relativePath);
                         }
                     }
                 };
@@ -416,21 +437,31 @@ public class SSLUtils {
         String keystoreFilePath =
                 getAndCheckOption(
                         config, SecurityOptions.SSL_REST_KEYSTORE, SecurityOptions.SSL_KEYSTORE);
+        String truststoreFilePath =
+                getAndCheckOption(
+                        config,
+                        SecurityOptions.SSL_REST_TRUSTSTORE,
+                        SecurityOptions.SSL_REST_TRUSTSTORE);
 
         ReloadableSslContext reloadableSslContext =
                 new ReloadableSslContext(config, clientMode, clientAuth, provider);
-        FileSystemWatchService fileSystemWatchService =
-                new FileSystemWatchService(Path.of(keystoreFilePath).getParent().toString()) {
+        FileSystemWatchCertificateReloadService fileSystemWatchService =
+                new FileSystemWatchCertificateReloadService(
+                        new HashSet<>(
+                                List.of(
+                                        Path.of(keystoreFilePath).getParent().toString(),
+                                        Path.of(truststoreFilePath).getParent().toString()))) {
                     @Override
                     protected void onFileOrDirectoryModified(Path relativePath) {
                         try {
-                            // TODO remove
-                            System.out.println(
-                                    "Reloading SSL context because of certificate change");
+                            LOG.debug(
+                                    "Reloading SSL context because {} has been modified",
+                                    relativePath);
                             reloadableSslContext.reload();
-                            System.out.println("SSL context reloaded successfully");
                         } catch (Exception e) {
-                            System.out.println("SSL context reload received exception: " + e);
+                            LOG.error(
+                                    "Failed to reload SSL context because {} has been modified",
+                                    relativePath);
                         }
                     }
                 };

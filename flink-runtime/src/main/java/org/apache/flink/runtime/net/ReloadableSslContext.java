@@ -37,6 +37,9 @@ import javax.net.ssl.TrustManagerFactory;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
 import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
@@ -44,63 +47,99 @@ import static org.apache.flink.runtime.net.SSLUtils.getKeyManagerFactory;
 import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
 
 /** SSL context which is able to reload keystore. */
-public class ReloadableSslContext extends SslContext {
+public class ReloadableSslContext extends SslContext implements Callable<Void> {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReloadableSslContext.class);
-    private final Configuration config;
-    private final boolean clientMode;
-    private final ClientAuth clientAuth;
-    private final SslProvider provider;
-    private volatile SslContext sslContext;
+
+    protected final ReadWriteLock lock = new ReentrantReadWriteLock();
+
+    protected final Configuration config;
+    protected final boolean clientMode;
+    protected final ClientAuth clientAuth;
+    protected final SslProvider provider;
+    protected volatile SslContext sslContext;
 
     public ReloadableSslContext(
-            Configuration config,
-            boolean clientMode,
-            ClientAuth clientAuth,
-            SslProvider provider)
+            Configuration config, boolean clientMode, ClientAuth clientAuth, SslProvider provider)
             throws Exception {
         this.config = config;
         this.clientMode = clientMode;
         this.clientAuth = clientAuth;
         this.provider = provider;
-            loadContext();
+        loadContext();
     }
 
     @Override
     public boolean isClient() {
-        return sslContext.isClient();
+        lock.readLock().lock();
+        try {
+            return sslContext.isClient();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public List<String> cipherSuites() {
-        return sslContext.cipherSuites();
+        lock.readLock().lock();
+        try {
+            return sslContext.cipherSuites();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public ApplicationProtocolNegotiator applicationProtocolNegotiator() {
-        return sslContext.applicationProtocolNegotiator();
+        lock.readLock().lock();
+        try {
+            return sslContext.applicationProtocolNegotiator();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator) {
-        return sslContext.newEngine(byteBufAllocator);
+        lock.readLock().lock();
+        try {
+            return sslContext.newEngine(byteBufAllocator);
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator, String s, int i) {
-        return sslContext.newEngine(byteBufAllocator, s, i);
+        lock.readLock().lock();
+        try {
+            return sslContext.newEngine(byteBufAllocator, s, i);
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public SSLSessionContext sessionContext() {
-        return sslContext.sessionContext();
+        lock.readLock().lock();
+        try {
+            return sslContext.sessionContext();
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public Void call() throws Exception {
+        loadContext();
+        return null;
     }
 
     public void reload() throws Exception {
-            loadContext();
+        loadContext();
     }
 
-    private void loadContext() throws Exception {
+    protected void loadContext() throws Exception {
         LOG.info("Loading SSL context from {}", config);
 
         String[] sslProtocols = getEnabledProtocols(config);
@@ -131,6 +170,11 @@ public class ReloadableSslContext extends SslContext {
                                     .clientAuth(clientAuth));
         }
 
-        sslContext = sslContextBuilder.sslProvider(provider).build();
+        lock.writeLock().lock();
+        try {
+            sslContext = sslContextBuilder.sslProvider(provider).build();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 }

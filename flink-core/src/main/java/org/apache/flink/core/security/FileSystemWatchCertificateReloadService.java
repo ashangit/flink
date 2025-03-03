@@ -15,12 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.flink.runtime.blob;
+package org.apache.flink.core.security;
 
-import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
-import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.nio.file.FileSystems;
@@ -29,50 +27,54 @@ import java.nio.file.Paths;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
+import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
 
 /** Service which is able to watch local filesystem directories. */
-public class FileSystemWatchService extends Thread {
-    private static final Logger LOG = LoggerFactory.getLogger(FileSystemWatchService.class);
+public class FileSystemWatchCertificateReloadService extends Thread {
 
-    private final String directoryPath;
+    private static final Logger LOG =
+            LoggerFactory.getLogger(FileSystemWatchCertificateReloadService.class);
 
-    public FileSystemWatchService(String directoryPath) {
-        if (!new File(directoryPath).isDirectory()) {
-            throw new IllegalArgumentException("Directory must exists: " + directoryPath);
+    private final Set<String> directoryPaths;
+
+    public FileSystemWatchCertificateReloadService(Set<String> directoryPaths) {
+        for (String directoryPath : directoryPaths) {
+            if (!new File(directoryPath).isDirectory()) {
+                throw new IllegalArgumentException("Directory must exists: " + directoryPath);
+            }
         }
-        this.directoryPath = directoryPath;
+        this.directoryPaths = directoryPaths;
     }
 
-    // TODO adapt logging
     @Override
     public void run() {
         try (WatchService watcher = FileSystems.getDefault().newWatchService()) {
-            LOG.info("Starting watching path: " + directoryPath);
-            Path realDirectoryPath = Paths.get(directoryPath).toRealPath();
-            LOG.info("Path is resolved to real path: " + realDirectoryPath);
-            realDirectoryPath.register(watcher, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY);
-            onWatchStarted(realDirectoryPath);
+            for (String directoryPath : directoryPaths) {
+                LOG.info("Starting watching path: {}", directoryPath);
+                Path realDirectoryPath = Paths.get(directoryPath).toRealPath();
+                LOG.info("Path is resolved to real path: {}", realDirectoryPath);
+                realDirectoryPath.register(watcher, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY);
+                onWatchStarted(realDirectoryPath);
+            }
 
             while (true) {
                 LOG.debug("Taking watch key");
                 WatchKey watchKey = watcher.take();
-                LOG.info("Watch key arrived");
+                LOG.debug("Watch key arrived");
                 for (WatchEvent<?> watchEvent : watchKey.pollEvents()) {
-                    LOG.info("Watch event count: " + watchEvent.count());
                     if (watchEvent.kind() == OVERFLOW) {
                         LOG.error("Filesystem events may have been lost or discarded");
                         Thread.yield();
                     } else if (watchEvent.kind() == ENTRY_CREATE) {
-                        LOG.info("ENTRY_CREATE");
                         onFileOrDirectoryCreated((Path) watchEvent.context());
                     } else if (watchEvent.kind() == ENTRY_DELETE) {
-                        LOG.info("ENTRY_DELETE");
                         onFileOrDirectoryDeleted((Path) watchEvent.context());
                     } else if (watchEvent.kind() == ENTRY_MODIFY) {
-                        LOG.info("ENTRY_MODIFY");
                         onFileOrDirectoryModified((Path) watchEvent.context());
                     } else {
                         throw new IllegalStateException("Invalid event kind: " + watchEvent.kind());
@@ -83,7 +85,7 @@ public class FileSystemWatchService extends Thread {
         } catch (InterruptedException e) {
             LOG.info("Filesystem watcher interrupted");
         } catch (Exception e) {
-            LOG.error("Filesystem watcher received exception and stopped: " + e);
+            LOG.error("Filesystem watcher received exception and stopped: ", e);
             throw new RuntimeException(e);
         }
     }
