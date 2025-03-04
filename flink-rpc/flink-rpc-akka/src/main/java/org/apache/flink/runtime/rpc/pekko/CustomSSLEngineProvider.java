@@ -17,7 +17,7 @@
 
 package org.apache.flink.runtime.rpc.pekko;
 
-import org.apache.flink.core.security.FileSystemWatchCertificateReloadService;
+import org.apache.flink.core.security.FileSystemWatchService;
 
 import org.apache.flink.shaded.netty4.io.netty.handler.ssl.util.FingerprintTrustManagerFactory;
 
@@ -60,8 +60,8 @@ public class CustomSSLEngineProvider implements SSLEngineProvider {
 
         sslContextLoader =
                 new SSLContextLoader(sslTrustStore, sslKeyStore, sslProtocol, securityConfig);
-        FileSystemWatchCertificateReloadService fileSystemWatchService =
-                new FileSystemWatchCertificateReloadService(
+        FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(
                         new HashSet<>(
                                 List.of(
                                         Path.of(sslTrustStore).getParent().toString(),

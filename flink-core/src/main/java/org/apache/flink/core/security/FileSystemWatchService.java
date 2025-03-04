@@ -35,14 +35,13 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
 
 /** Service which is able to watch local filesystem directories. */
-public class FileSystemWatchCertificateReloadService extends Thread {
+public class FileSystemWatchService extends Thread {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(FileSystemWatchCertificateReloadService.class);
+    private static final Logger LOG = LoggerFactory.getLogger(FileSystemWatchService.class);
 
     private final Set<String> directoryPaths;
 
-    public FileSystemWatchCertificateReloadService(Set<String> directoryPaths) {
+    public FileSystemWatchService(Set<String> directoryPaths) {
         for (String directoryPath : directoryPaths) {
             if (!new File(directoryPath).isDirectory()) {
                 throw new IllegalArgumentException("Directory must exists: " + directoryPath);
@@ -77,7 +76,7 @@ public class FileSystemWatchCertificateReloadService extends Thread {
                     } else if (watchEvent.kind() == ENTRY_MODIFY) {
                         onFileOrDirectoryModified((Path) watchEvent.context());
                     } else {
-                        throw new IllegalStateException("Invalid event kind: " + watchEvent.kind());
+                        LOG.warn("Unhandled watch event {}", watchEvent.kind());
                     }
                 }
                 watchKey.reset();

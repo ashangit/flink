@@ -45,14 +45,10 @@ import java.security.SecureRandom;
 import java.security.UnrecoverableKeyException;
 import java.util.List;
 import java.util.concurrent.Callable;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class SSLContextLoader implements Callable<Void> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SSLContextLoader.class);
-
-    private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     private final String sslTrustStore;
     private final String sslTrustStorePassword;
@@ -65,7 +61,7 @@ public class SSLContextLoader implements Callable<Void> {
     private final String sslKeyPassword;
     private final String sslRandomNumberGenerator;
 
-    private SSLContext sslContext;
+    private volatile SSLContext sslContext;
 
     public SSLContextLoader(
             String sslTrustStore, String sslKeyStore, String sslProtocol, Config securityConfig) {
@@ -98,21 +94,11 @@ public class SSLContextLoader implements Callable<Void> {
             throw new RuntimeException(e);
         }
 
-        lock.writeLock().lock();
-        try {
-            this.sslContext = ctx;
-        } finally {
-            lock.writeLock().unlock();
-        }
+        this.sslContext = ctx;
     }
 
     public SSLEngine createSSLEngine() {
-        lock.readLock().lock();
-        try {
-            return sslContext.createSSLEngine();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.createSSLEngine();
     }
 
     public SecureRandom createSecureRandom() throws NoSuchAlgorithmException {

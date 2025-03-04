@@ -52,12 +52,7 @@ public class ReloadableJdkSslContext extends ReloadableSslContext {
     }
 
     public final SSLContext context() {
-        lock.readLock().lock();
-        try {
-            return ((JdkSslContext) this.sslContext).context();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return ((JdkSslContext) this.sslContext).context();
     }
 
     @Override
@@ -82,19 +77,14 @@ public class ReloadableJdkSslContext extends ReloadableSslContext {
         Optional<TrustManagerFactory> tmf = getTrustManagerFactory(config, true);
         tmf.map(sslContextBuilder::trustManager);
 
-        lock.writeLock().lock();
-        try {
-            this.sslContext =
-                    sslContextBuilder
-                            .sslProvider(provider)
-                            .protocols(sslProtocols)
-                            .ciphers(ciphers)
-                            .clientAuth(clientAuth)
-                            .sessionCacheSize(sessionCacheSize)
-                            .sessionTimeout(sessionTimeoutMs / 1000)
-                            .build();
-        } finally {
-            lock.writeLock().unlock();
-        }
+        this.sslContext =
+                sslContextBuilder
+                        .sslProvider(provider)
+                        .protocols(sslProtocols)
+                        .ciphers(ciphers)
+                        .clientAuth(clientAuth)
+                        .sessionCacheSize(sessionCacheSize)
+                        .sessionTimeout(sessionTimeoutMs / 1000)
+                        .build();
     }
 }

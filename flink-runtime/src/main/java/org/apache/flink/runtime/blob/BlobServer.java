@@ -24,7 +24,7 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.BlobServerOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.SecurityOptions;
-import org.apache.flink.core.security.FileSystemWatchCertificateReloadService;
+import org.apache.flink.core.security.FileSystemWatchService;
 import org.apache.flink.runtime.dispatcher.cleanup.GloballyCleanableResource;
 import org.apache.flink.runtime.dispatcher.cleanup.LocallyCleanableResource;
 import org.apache.flink.util.ExceptionUtils;
@@ -206,8 +206,8 @@ public class BlobServer extends Thread
                 config.get(
                         SecurityOptions.SSL_INTERNAL_TRUSTSTORE,
                         config.get(SecurityOptions.SSL_INTERNAL_TRUSTSTORE));
-        FileSystemWatchCertificateReloadService fileSystemWatchService =
-                new FileSystemWatchCertificateReloadService(
+        FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(
                         new HashSet<>(
                                 List.of(
                                         Path.of(keystoreFilePath).getParent().toString(),
@@ -229,7 +229,7 @@ public class BlobServer extends Thread
         fileSystemWatchService.start();
 
         // start the server thread
-        setName("BLOB Server listener");
+        setName("BLOB Server listener at " + getPort());
         setDaemon(true);
 
         checkStoredBlobsForCorruption();

@@ -23,7 +23,7 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.configuration.SecurityOptions;
-import org.apache.flink.core.security.FileSystemWatchCertificateReloadService;
+import org.apache.flink.core.security.FileSystemWatchService;
 import org.apache.flink.runtime.io.network.netty.SSLHandlerFactory;
 import org.apache.flink.util.StringUtils;
 
@@ -79,7 +79,7 @@ public class SSLUtils {
      */
     public static ServerSocketFactory createSSLServerSocketFactory(Configuration config)
             throws Exception {
-        SSLContext sslContext = createInternalSSLContext(config, false);
+        SSLContext sslContext = createInternalSSLContext(config, false, false);
         if (sslContext == null) {
             throw new IllegalConfigurationException("SSL is not enabled");
         }
@@ -97,7 +97,7 @@ public class SSLUtils {
      */
     public static SocketFactory createSSLClientSocketFactory(Configuration config)
             throws Exception {
-        SSLContext sslContext = createInternalSSLContext(config, true);
+        SSLContext sslContext = createInternalSSLContext(config, true, true);
         if (sslContext == null) {
             throw new IllegalConfigurationException("SSL is not enabled");
         }
@@ -108,7 +108,7 @@ public class SSLUtils {
     /** Creates a SSLEngineFactory to be used by internal communication server endpoints. */
     public static SSLHandlerFactory createInternalServerSSLEngineFactory(final Configuration config)
             throws Exception {
-        SslContext sslContext = createInternalNettySSLContext(config, false);
+        SslContext sslContext = createInternalNettySSLContext(config, false, true);
         if (sslContext == null) {
             throw new IllegalConfigurationException(
                     "SSL is not enabled for internal communication.");
@@ -123,7 +123,7 @@ public class SSLUtils {
     /** Creates a SSLEngineFactory to be used by internal communication client endpoints. */
     public static SSLHandlerFactory createInternalClientSSLEngineFactory(final Configuration config)
             throws Exception {
-        SslContext sslContext = createInternalNettySSLContext(config, true);
+        SslContext sslContext = createInternalNettySSLContext(config, true, true);
         if (sslContext == null) {
             throw new IllegalConfigurationException(
                     "SSL is not enabled for internal communication.");
@@ -328,10 +328,13 @@ public class SSLUtils {
      * the client and server side configuration are identical, because of mutual authentication.
      */
     @Nullable
-    private static SSLContext createInternalSSLContext(Configuration config, boolean clientMode)
+    private static SSLContext createInternalSSLContext(
+            Configuration config, boolean clientMode, Boolean watchForCertificateChange)
             throws Exception {
         ReloadableJdkSslContext nettySSLContext =
-                (ReloadableJdkSslContext) createInternalNettySSLContext(config, clientMode, JDK);
+                (ReloadableJdkSslContext)
+                        createInternalNettySSLContext(
+                                config, clientMode, JDK, watchForCertificateChange);
         if (nettySSLContext != null) {
             return nettySSLContext.context();
         } else {
@@ -341,8 +344,10 @@ public class SSLUtils {
 
     @Nullable
     private static SslContext createInternalNettySSLContext(
-            Configuration config, boolean clientMode) throws Exception {
-        return createInternalNettySSLContext(config, clientMode, getSSLProvider(config));
+            Configuration config, boolean clientMode, Boolean watchForCertificateChange)
+            throws Exception {
+        return createInternalNettySSLContext(
+                config, clientMode, getSSLProvider(config), watchForCertificateChange);
     }
 
     /**
@@ -351,7 +356,11 @@ public class SSLUtils {
      */
     @Nullable
     private static SslContext createInternalNettySSLContext(
-            Configuration config, boolean clientMode, SslProvider provider) throws Exception {
+            Configuration config,
+            boolean clientMode,
+            SslProvider provider,
+            Boolean watchForCertificateChange)
+            throws Exception {
         checkNotNull(config, "config");
 
         if (!SecurityOptions.isInternalSSLEnabled(config)) {
@@ -371,27 +380,29 @@ public class SSLUtils {
 
         ReloadableJdkSslContext reloadableJdkSslContext =
                 new ReloadableJdkSslContext(config, clientMode, provider);
-        FileSystemWatchCertificateReloadService fileSystemWatchService =
-                new FileSystemWatchCertificateReloadService(
-                        new HashSet<>(
-                                List.of(
-                                        Path.of(keystoreFilePath).getParent().toString(),
-                                        Path.of(truststoreFilePath).getParent().toString()))) {
-                    @Override
-                    protected void onFileOrDirectoryModified(Path relativePath) {
-                        try {
-                            LOG.debug(
-                                    "Reloading SSL context because {} has been modified",
-                                    relativePath);
-                            reloadableJdkSslContext.reload();
-                        } catch (Exception e) {
-                            LOG.error(
-                                    "Failed to reload SSL context because {} has been modified",
-                                    relativePath);
+        if (watchForCertificateChange) {
+            FileSystemWatchService fileSystemWatchService =
+                    new FileSystemWatchService(
+                            new HashSet<>(
+                                    List.of(
+                                            Path.of(keystoreFilePath).getParent().toString(),
+                                            Path.of(truststoreFilePath).getParent().toString()))) {
+                        @Override
+                        protected void onFileOrDirectoryModified(Path relativePath) {
+                            try {
+                                LOG.debug(
+                                        "Reloading Internal SSL context because {} has been modified",
+                                        relativePath);
+                                reloadableJdkSslContext.reload();
+                            } catch (Exception e) {
+                                LOG.error(
+                                        "Failed to reload Internal SSL context because {} has been modified",
+                                        relativePath);
+                            }
                         }
-                    }
-                };
-        fileSystemWatchService.start();
+                    };
+            fileSystemWatchService.start();
+        }
 
         return reloadableJdkSslContext;
     }
@@ -445,8 +456,8 @@ public class SSLUtils {
 
         ReloadableSslContext reloadableSslContext =
                 new ReloadableSslContext(config, clientMode, clientAuth, provider);
-        FileSystemWatchCertificateReloadService fileSystemWatchService =
-                new FileSystemWatchCertificateReloadService(
+        FileSystemWatchService fileSystemWatchService =
+                new FileSystemWatchService(
                         new HashSet<>(
                                 List.of(
                                         Path.of(keystoreFilePath).getParent().toString(),
@@ -455,12 +466,12 @@ public class SSLUtils {
                     protected void onFileOrDirectoryModified(Path relativePath) {
                         try {
                             LOG.debug(
-                                    "Reloading SSL context because {} has been modified",
+                                    "Reloading REST SSL context because {} has been modified",
                                     relativePath);
                             reloadableSslContext.reload();
                         } catch (Exception e) {
                             LOG.error(
-                                    "Failed to reload SSL context because {} has been modified",
+                                    "Failed to reload REST SSL context because {} has been modified",
                                     relativePath);
                         }
                     }

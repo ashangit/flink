@@ -38,8 +38,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.flink.runtime.net.SSLUtils.getEnabledCipherSuites;
 import static org.apache.flink.runtime.net.SSLUtils.getEnabledProtocols;
@@ -50,8 +48,6 @@ import static org.apache.flink.runtime.net.SSLUtils.getTrustManagerFactory;
 public class ReloadableSslContext extends SslContext implements Callable<Void> {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReloadableSslContext.class);
-
-    protected final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     protected final Configuration config;
     protected final boolean clientMode;
@@ -71,62 +67,32 @@ public class ReloadableSslContext extends SslContext implements Callable<Void> {
 
     @Override
     public boolean isClient() {
-        lock.readLock().lock();
-        try {
-            return sslContext.isClient();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.isClient();
     }
 
     @Override
     public List<String> cipherSuites() {
-        lock.readLock().lock();
-        try {
-            return sslContext.cipherSuites();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.cipherSuites();
     }
 
     @Override
     public ApplicationProtocolNegotiator applicationProtocolNegotiator() {
-        lock.readLock().lock();
-        try {
-            return sslContext.applicationProtocolNegotiator();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.applicationProtocolNegotiator();
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator) {
-        lock.readLock().lock();
-        try {
-            return sslContext.newEngine(byteBufAllocator);
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.newEngine(byteBufAllocator);
     }
 
     @Override
     public SSLEngine newEngine(ByteBufAllocator byteBufAllocator, String s, int i) {
-        lock.readLock().lock();
-        try {
-            return sslContext.newEngine(byteBufAllocator, s, i);
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.newEngine(byteBufAllocator, s, i);
     }
 
     @Override
     public SSLSessionContext sessionContext() {
-        lock.readLock().lock();
-        try {
-            return sslContext.sessionContext();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return sslContext.sessionContext();
     }
 
     @Override
@@ -170,11 +136,6 @@ public class ReloadableSslContext extends SslContext implements Callable<Void> {
                                     .clientAuth(clientAuth));
         }
 
-        lock.writeLock().lock();
-        try {
-            sslContext = sslContextBuilder.sslProvider(provider).build();
-        } finally {
-            lock.writeLock().unlock();
-        }
+        sslContext = sslContextBuilder.sslProvider(provider).build();
     }
 }
