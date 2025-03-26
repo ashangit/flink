@@ -107,10 +107,6 @@ public class ReloadableSslContext extends SslContext implements Callable<Void> {
         return null;
     }
 
-    public void reload() throws Exception {
-        loadContext();
-    }
-
     protected void loadContext() throws Exception {
         LOG.info("Loading SSL context from {}", config);
 
